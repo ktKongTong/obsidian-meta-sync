@@ -1,116 +1,165 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import {App,Notice, Plugin, PluginSettingTab, Setting, TFile,} from 'obsidian';
+import { nanoid } from 'nanoid'
+import {db, LocalData, LocalMDData} from './db';
 
-// Remember to rename these classes and interfaces!
-
-interface MyPluginSettings {
-	mySetting: string;
+interface DocMetaDBSyncerPluginSettings {
+	connectionString: string;
+	includePattern: string;
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+const DEFAULT_SETTINGS: DocMetaDBSyncerPluginSettings = {
+	connectionString: 'connectionString',
+	includePattern: '*',
 }
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
 
+export default class DocMetaDBSyncerPlugin extends Plugin {
+	settings: DocMetaDBSyncerPluginSettings;
+	db: ReturnType<typeof db>
 	async onload() {
 		await this.loadSettings();
-
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
+		if(this.settings.connectionString !== DEFAULT_SETTINGS.connectionString) {
+			this.db = db(this.settings.connectionString)
+			new Notice("success init db")
+		}
+		this.registerEvent(this.app.vault.on('create', (file) => this.addNanoIdToFile(file as never)))
+		const ribbonIconEl = this.addRibbonIcon('dice', 'addNanoIdToExistingFiles', (evt: MouseEvent) => {
 			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
+			new Notice('addNanoIdToExistingFiles!');
+			this.addNanoIdToExistingFiles().then(()=>new Notice('addNanoIdSuccess!'))
 		});
+
+		const syncRibbonIconEl = this.addRibbonIcon('dice', 'sync', async (evt: MouseEvent) => {
+			// Called when the user clicks the icon.
+			new Notice('sync to db!');
+			await this.syncToDB()
+				.then(()=>new Notice('sync success!'))
+		});
+		syncRibbonIconEl.addClass('my-plugin-ribbon-class');
 		// Perform additional things with the ribbon
 		ribbonIconEl.addClass('my-plugin-ribbon-class');
-
 		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
 		const statusBarItemEl = this.addStatusBarItem();
+
 		statusBarItemEl.setText('Status Bar Text');
 
-		// This adds a simple command that can be triggered anywhere
 		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
+			id: 'add-nano-to-existing-files',
+			name: 'Add UUID to Existing Files',
+			callback: () => this.addNanoIdToExistingFiles()
 		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-			}
-		});
-
 		// This adds a settings tab so the user can configure various aspects of the plugin
 		this.addSettingTab(new SampleSettingTab(this.app, this));
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
 
 		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
 		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
 	}
+	async syncToDB() {
+		if(this.db) {
+			const data = await this.getDataNeedSync()
+			await this.db.syncDocs(data)
+		}
+	}
+	async getDataNeedSync():Promise<LocalData[]> {
+		const mds = this.app.vault.getMarkdownFiles()
+		const metas:(LocalMDData & {file:TFile})[] = (await Promise.all(mds.map(md => this.extractMDData(md))))
+			.filter(it=> it != null) as never as (LocalMDData & {file:TFile})[]
 
-	onunload() {
+		const folders = new Map<string, LocalData>();
+		// add root to folders
+		metas.forEach(it=> {
+			if(!it) return
+			let parent = it.file.parent
+			while(parent) {
+				const id = parent.path
+				const p = parent.parent
+				folders.set(id,  {
+					id: id,
+					path: parent.path,
+					title: parent.name,
+					parentId: parent.isRoot() ? null: p?.path ?? null,
+					type:'folder'
+				});
+				parent = parent.isRoot() ? null : p;
+			}
+		})
+		const folderArr:LocalData[] = []
+		for (const [, folder] of folders) {
+			folderArr.push(folder)
+		}
+		const toBeSynced:LocalData[] = metas.map((it)=> ({
+			id: it.id,
+			date: it.date,
+			title: it.title,
+			parentId: it.file.parent?.path,
+			path: it.path,
+			type: 'file',
+			// wordcount: it.wordcount,
+			tags: it.tags,
+			excerpt: it.excerpt,
+		}))
+		return toBeSynced.concat(folderArr);
+	}
+	async extractMDData(file:TFile):Promise<(LocalMDData & {file:TFile}) | null> {
+		if (file.extension !== 'md') return null;
+		const metadata = this.app.metadataCache.getFileCache(file);
+		const frontMatter = metadata?.frontmatter;
+		if (!frontMatter) {
+			throw new Error('some md does container metadata');
+		}
+		// read file
+		// const content = await file.vault.read(file)
+		return {
+			title: (frontMatter.title || file.basename) as string,
+			id: frontMatter.id as string,
+			path: file.path,
+			date: frontMatter?.date ? new Date(frontMatter.date)  : new Date(file.stat.ctime),
+			excerpt: (frontMatter?.excerpt || '') as string,
+			tags: (frontMatter?.tags || []) as string[],
+			type: 'file',
+			// wordcount: getWordCount(content),
+			file: file
+		};
+	}
 
+	async addNanoIdToFile(file: TFile) {
+		if (file.extension === 'md') {
+			const content = await this.app.vault.read(file);
+			if (!content.startsWith('---')) {
+				const newContent = `---
+id: ${nanoid()}
+---
+${content}`;
+				await this.app.vault.modify(file, newContent);
+			} else {
+				const lines = content.split('\n');
+				const idx = lines.findIndex(line => line === '---');
+				lines.splice(idx + 1, 0, `id: ${nanoid()}`);
+				const newContent = lines.join('\n');
+				await this.app.vault.modify(file, newContent);
+			}
+		}
+	}
+	async addNanoIdToExistingFiles() {
+		const files = this.app.vault.getMarkdownFiles();
+		for (const file of files) {
+			await this.addNanoIdToFile(file)
+		}
 	}
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 	}
-
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
-
 class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+	plugin: DocMetaDBSyncerPlugin;
 
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, plugin: DocMetaDBSyncerPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
@@ -121,14 +170,15 @@ class SampleSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
+			.setName('connectionString')
+			.setDesc('DBConnectionString')
 			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
+				.setPlaceholder('Enter your db ConnectionString')
+				.setValue(this.plugin.settings.connectionString)
 				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
+					this.plugin.settings.connectionString = value;
 					await this.plugin.saveSettings();
 				}));
 	}
 }
+

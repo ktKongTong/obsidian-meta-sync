@@ -1,11 +1,10 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
-	"version": "1.0.0",
+	"id": "meta-sync-plugin",
+	"name": "obsidian-metadata-sync",
+	"version": "0.0.1",
 	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"description": "an obsidian plugin to sync local metadata to a postgres db. such as filename, relativepath, title, tags, excerpt, etc. for personal use, to publish my obsidian info",
+	"author": "ktKongTong",
+	"authorUrl": "https://github.com/ktKongTong",
 	"isDesktopOnly": false
 }

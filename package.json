@@ -16,9 +16,17 @@
 		"@typescript-eslint/eslint-plugin": "5.29.0",
 		"@typescript-eslint/parser": "5.29.0",
 		"builtin-modules": "3.3.0",
+		"drizzle-kit": "^0.22.7",
 		"esbuild": "0.17.3",
 		"obsidian": "latest",
 		"tslib": "2.4.0",
 		"typescript": "4.7.4"
+	},
+	"packageManager": "pnpm@9.0.4+sha256.caa915eaae9d9aefccf50ee8aeda25a2f8684d8f9d5c6e367eaf176d97c1f89e",
+	"dependencies": {
+		"@supabase/postgrest-js": "^1.15.5",
+		"drizzle-orm": "^0.31.2",
+		"nanoid": "^5.0.7",
+		"postgres": "3.3.5"
 	}
 }
